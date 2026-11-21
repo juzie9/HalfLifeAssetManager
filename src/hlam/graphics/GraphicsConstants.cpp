@@ -10,6 +10,7 @@ const char* RenderModeToString( const RenderMode renderMode )
 	case RenderMode::FLAT_SHADED:		return "Flat Shaded";
 	case RenderMode::SMOOTH_SHADED:		return "Smooth Shaded";
 	case RenderMode::TEXTURE_SHADED:	return "Texture Shaded";
+	case RenderMode::VERTEX_WEIGHTS:	return "Vertex Weights";
 
 	default:							return "Invalid";
 	}

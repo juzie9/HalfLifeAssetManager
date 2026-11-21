@@ -144,6 +144,11 @@
          <string>Texture Shaded</string>
         </property>
        </item>
+       <item>
+        <property name="text">
+         <string>Vertex Weights</string>
+        </property>
+       </item>
       </widget>
      </item>
      <item row="4" column="0" colspan="2">

@@ -40,6 +40,12 @@ struct ModelRenderInfo
 
 	std::array<std::uint8_t, ControllerCount> Controller;
 	std::uint8_t Mouth;
+
+	/**
+	*	@brief Draws the model with per-vertex bone weights made visible instead
+	*	of its textures. Rigid (single bone) and unweighted vertices are white.
+	*/
+	bool ShowVertexWeights = false;
 };
 }
 

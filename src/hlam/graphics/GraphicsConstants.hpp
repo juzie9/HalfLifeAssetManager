@@ -52,6 +52,13 @@ enum class RenderMode
 	SMOOTH_SHADED,
 	TEXTURE_SHADED,
 
+	/**
+	*	@brief Visualizes per-vertex bone weights: rigged (multi bone) areas are
+	*	coloured by their influence count, unweighted and hard weighted (single
+	*	bone) areas are drawn in plain white.
+	*/
+	VERTEX_WEIGHTS,
+
 	COUNT,
 	LAST = COUNT - 1 //Must be last
 };

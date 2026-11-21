@@ -308,6 +308,7 @@ void SetupRenderMode(QOpenGLFunctions_1_1* openglFunctions, RenderMode renderMod
 
 	case RenderMode::FLAT_SHADED:
 	case RenderMode::SMOOTH_SHADED:
+	case RenderMode::VERTEX_WEIGHTS:
 	{
 		openglFunctions->glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
 		openglFunctions->glDisable(GL_TEXTURE_2D);
@@ -524,6 +525,8 @@ unsigned int DrawMirroredModel(QOpenGLFunctions_1_1* openglFunctions,
 	}
 
 	studiomdl::ModelRenderInfo renderInfo = pEntity->GetRenderInfo();
+
+	renderInfo.ShowVertexWeights = renderMode == RenderMode::VERTEX_WEIGHTS;
 
 	renderInfo.Origin.z -= origin.z * 2;
 

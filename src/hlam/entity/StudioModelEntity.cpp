@@ -116,6 +116,8 @@ void StudioModelEntity::Draw(graphics::SceneContext& sc, RenderPasses renderPass
 
 	studiomdl::ModelRenderInfo renderInfo = GetRenderInfo();
 
+	renderInfo.ShowVertexWeights = asset->CurrentRenderMode == RenderMode::VERTEX_WEIGHTS;
+
 	GetContext()->StudioModelRenderer->DrawModel(
 		renderInfo, GetContext()->Asset->GetGroundEntity()->GetOrigin().z, flags);
 

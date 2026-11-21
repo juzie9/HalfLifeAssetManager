@@ -24,6 +24,26 @@
 
 namespace studiomdl
 {
+namespace
+{
+/**
+*	@brief Colour used to visualize the number of bone influences of a vertex.
+*
+*	Unweighted and hard weighted (single bone) vertices are plain white; each
+*	additional influence gets its own colour so rigged areas stand out.
+*/
+glm::vec3 ComputeVertexWeightColor(const StudioModelVertexInfo& vertexInfo)
+{
+	switch (vertexInfo.NumWeights)
+	{
+	case 2: return {1.0f, 1.0f, 0.0f};	// yellow
+	case 3: return {1.0f, 0.0f, 1.0f};	// magenta
+	case 4: return {0.0f, 1.0f, 1.0f};	// cyan
+	default: return {1.0f, 1.0f, 1.0f};	// none / single bone: white
+	}
+}
+} // namespace
+
 StudioModelRenderer::StudioModelRenderer(const std::shared_ptr<spdlog::logger>& logger, QOpenGLFunctions_1_1* openglFunctions, ColorSettings* colorSettings)
 	: _logger(logger)
 	, _openglFunctions(openglFunctions)
@@ -660,6 +680,12 @@ unsigned int StudioModelRenderer::DrawPoints(const bool bWireframe)
 
 		for (int i = 0; i < mesh.NumNorms; i++, ++lv, ++normals)
 		{
+			if (_renderInfo->ShowVertexWeights)
+			{
+				*lv = ComputeVertexWeightColor(*normals);
+				continue;
+			}
+
 			Lighting(*lv, normals->Bone->ArrayIndex, flags, normals->Vertex);
 
 			// FIX: move this check out of the inner loop
