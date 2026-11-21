@@ -255,13 +255,15 @@ void DumpModelInfo(FILE* file, const std::filesystem::path& fileName, const Edit
 					"\tSub Model %d Meshes: %d\n"
 					"\tSub Model %d Vertices: %d\n"
 					"\tSub Model %d Normals: %d\n"
-					"\tSub Model %d Deformation Groups: %d\n\n",
+					"\tSub Model %d Blended Vertex Info: %d\n"
+					"\tSub Model %d Blended Normal Info: %d\n\n",
 					iModel + 1, pSubModel->name,
 					iModel + 1, pSubModel->type,
 					iModel + 1, pSubModel->nummesh,
 					iModel + 1, pSubModel->numverts,
 					iModel + 1, pSubModel->numnorms,
-					iModel + 1, pSubModel->numgroups
+					iModel + 1, pSubModel->blendvertinfoindex,
+					iModel + 1, pSubModel->blendnorminfoindex
 				);
 
 				const mstudiomesh_t* pMesh = reinterpret_cast<const mstudiomesh_t*>(pByte + pSubModel->meshindex);

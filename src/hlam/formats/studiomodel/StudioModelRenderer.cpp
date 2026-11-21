@@ -479,7 +479,7 @@ void StudioModelRenderer::DrawNormals()
 
 		for (int i = 0; i < _model->Vertices.size(); i++)
 		{
-			_xformverts[i] = _bonetransform[_model->Vertices[i].Bone->ArrayIndex] * glm::vec4{_model->Vertices[i].Vertex, 1};
+			_xformverts[i] = TransformVertex(_model->Vertices[i]);
 		}
 
 		for (int i = 0; i < _model->Normals.size(); i++)
@@ -530,6 +530,80 @@ void StudioModelRenderer::SetUpBones()
 			_renderInfo->Controller,
 			_renderInfo->Mouth
 		}).data();
+
+	// Bone weighted models skin in model space: worldtransform combines the
+	// animated bone matrix with the inverse bind pose (poseToBone). Classic
+	// models keep using bonetransform directly.
+	if (_studioModel->HasBoneWeights && !_studioModel->BoneInfoPoseToBone.empty())
+	{
+		const std::size_t count = std::min<std::size_t>(_studioModel->BoneInfoPoseToBone.size(),
+			_studioModel->Bones.size());
+
+		for (std::size_t i = 0; i < count; ++i)
+		{
+			const auto& poseToBone = _studioModel->BoneInfoPoseToBone[i];
+
+			// The file stores a row-major 3x4 matrix with the translation in the
+			// fourth column; glm is column-major, so transpose it here.
+			const glm::mat4 matrix
+			{
+				poseToBone[0], poseToBone[4], poseToBone[8], 0.0f,
+				poseToBone[1], poseToBone[5], poseToBone[9], 0.0f,
+				poseToBone[2], poseToBone[6], poseToBone[10], 0.0f,
+				poseToBone[3], poseToBone[7], poseToBone[11], 1.0f
+			};
+
+			_worldtransform[i] = _bonetransform[i] * matrix;
+		}
+	}
+
+	// Animated texture playback follows the sequence time.
+	_animationTime = 0;
+
+	if (_renderInfo->Sequence >= 0
+		&& static_cast<std::size_t>(_renderInfo->Sequence) < _studioModel->Sequences.size())
+	{
+		const auto& sequence = *_studioModel->Sequences[_renderInfo->Sequence];
+
+		if (sequence.FPS > 0)
+		{
+			_animationTime = _renderInfo->Frame / sequence.FPS;
+		}
+	}
+}
+
+glm::vec3 StudioModelRenderer::TransformVertex(const StudioModelVertexInfo& vertexInfo) const
+{
+	if (vertexInfo.NumWeights > 0)
+	{
+		glm::mat4 matrix{0.0f};
+
+		for (int i = 0; i < vertexInfo.NumWeights; ++i)
+		{
+			const auto& weight = vertexInfo.Weights[i];
+
+			matrix += weight.Weight * _worldtransform[weight.Bone->ArrayIndex];
+		}
+
+		return glm::vec3{matrix * glm::vec4{vertexInfo.Vertex, 1}};
+	}
+
+	return glm::vec3{_bonetransform[vertexInfo.Bone->ArrayIndex] * glm::vec4{vertexInfo.Vertex, 1}};
+}
+
+int StudioModelRenderer::ResolveTextureIndex(const int textureIndex) const
+{
+	const auto* animatedTexture = _studioModel->FindAnimatedTexture(textureIndex);
+
+	if (animatedTexture && animatedTexture->FrameRate > 0 && !animatedTexture->Frames.empty())
+	{
+		const int frameCount = static_cast<int>(animatedTexture->Frames.size());
+		const int frame = static_cast<int>(_animationTime * animatedTexture->FrameRate) % frameCount;
+
+		return animatedTexture->Frames[frame];
+	}
+
+	return textureIndex;
 }
 
 void StudioModelRenderer::SetupLighting()
@@ -563,7 +637,7 @@ unsigned int StudioModelRenderer::DrawPoints(const bool bWireframe)
 
 	for (int i = 0; i < _model->Vertices.size(); i++)
 	{
-		_xformverts[i] = _bonetransform[_model->Vertices[i].Bone->ArrayIndex] * glm::vec4{_model->Vertices[i].Vertex, 1};
+		_xformverts[i] = TransformVertex(_model->Vertices[i]);
 	}
 
 	SortedMesh meshes[MAXSTUDIOMESHES]{};
@@ -579,7 +653,7 @@ unsigned int StudioModelRenderer::DrawPoints(const bool bWireframe)
 	{
 		const auto& mesh = _model->Meshes[j];
 
-		const int flags = _studioModel->Textures[_studioModel->SkinFamilies[_renderInfo->Skin][mesh.SkinRef]]->Flags;
+		const int flags = _studioModel->Textures[ResolveTextureIndex(_studioModel->SkinFamilies[_renderInfo->Skin][mesh.SkinRef])]->Flags;
 
 		meshes[j].Mesh = &mesh;
 		meshes[j].Flags = flags;
@@ -627,7 +701,7 @@ unsigned int StudioModelRenderer::DrawMeshes(const bool bWireframe, const Sorted
 		const auto& mesh = *pMeshes[j].Mesh;
 		auto ptricmds = mesh.Triangles.data();
 
-		const short textureIndex = _studioModel->SkinFamilies[_renderInfo->Skin][mesh.SkinRef];
+		const int textureIndex = ResolveTextureIndex(_studioModel->SkinFamilies[_renderInfo->Skin][mesh.SkinRef]);
 
 		const auto& texture = *_studioModel->Textures[textureIndex];
 

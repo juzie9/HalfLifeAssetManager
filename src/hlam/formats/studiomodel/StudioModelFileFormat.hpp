@@ -117,6 +117,51 @@ struct mstudiobone_t
 	float	scale[STUDIO_NUM_COORDINATE_AXES];   // scale for delta DoF values
 };
 
+/**
+*	@brief Per-vertex/perp-normal bone weights.
+*
+*	Xash3D FWGS extension, stored by the studio model when the header carries
+*	StudioHasBoneWeights. Up to MaxStudioBoneWeights influences; unused entries
+*	have bone == -1 so engines count influences as "bone[i] != -1".
+*/
+constexpr int MaxStudioBoneWeights{4};
+
+struct mstudioboneweight_t
+{
+	std::uint8_t	weight[MaxStudioBoneWeights];
+	std::int8_t		bone[MaxStudioBoneWeights];
+};
+
+static_assert(sizeof(mstudioboneweight_t) == 8, "Bone weight entries must be 8 bytes");
+
+/**
+*	@brief Extra per-bone data stored immediately after the bone array.
+*
+*	Xash3D FWGS extension, present when the header carries StudioHasBoneInfo.
+*	poseToBone is the inverse bind pose (bone space to model space) used by the
+*	engine to build its skinning matrices.
+*/
+struct mstudioboneinfo_t
+{
+	float		poseToBone[3][4];
+	float		qAlignment[4];
+	int			proctype;
+	int			procindex;
+	float		quat[4];
+	int			reserved[10];
+};
+
+static_assert(sizeof(mstudioboneinfo_t) == 128, "Bone info entries must be 128 bytes");
+
+/**
+*	@brief Flags stored in studiohdr_t::flags for the Xash3D extensions.
+*/
+enum
+{
+	STUDIO_HAS_BONEINFO = 0x40000000,	//! Extra bone info (poseToBone) is present
+	STUDIO_HAS_BONEWEIGHTS = static_cast<int>(0x80000000u),	//! Vertices have bone weights
+};
+
 
 // bone controllers
 struct mstudiobonecontroller_t
@@ -288,6 +333,41 @@ struct mstudiotexture_t
 // skin families
 // short	index[skinfamilies][skinref]
 
+/**
+*	@brief Animated texture extension (Xash3D FWGS).
+*
+*	A texture entry marked with STUDIO_NF_ANIMATED is driven by one of these
+*	descriptors. The block lives at studiohdr_t::animextindex and is laid out as
+*	[header][numanimated descriptors][per descriptor: int32 texture indices].
+*/
+enum
+{
+	MAXSTUDIOANIMTEXTURES = 256,	//! Total animated textures
+	MAXSTUDIOANIMFRAMES = 32,		//! Frames per animated texture
+	MAXSTUDIOANIMRATE = 1024,		//! Maximum playback rate (frames per second)
+};
+
+constexpr int IDANIMTEXHEADER{('A' << 24) + ('T' << 16) + ('A' << 8) + 'S'};	//! "SATA"
+constexpr int STUDIO_ANIMTEX_VERSION{1};
+
+struct mstudioanimatedtextureheader_t
+{
+	int		magic;		//! IDANIMTEXHEADER
+	int		version;	//! STUDIO_ANIMTEX_VERSION
+	int		numanimated;
+};
+
+struct mstudioanimatedtexture_t
+{
+	int		framerate;		//! Playback rate in frames per second, 1..MAXSTUDIOANIMRATE
+	int		numframes;		//! Number of frames, 1..MAXSTUDIOANIMFRAMES
+	int		frameoffset;	//! Offset to int32[numframes] texture indices, relative to the header
+	int		textureindex;	//! Texture entry this animation drives (frames[0] must equal it)
+	int		padding[4];		//! Reserved, must be zero
+};
+
+static_assert(sizeof(mstudioanimatedtexture_t) == 32, "Animated texture entries must be 32 bytes");
+
 // studio models
 struct mstudiomodel_t
 {
@@ -307,8 +387,14 @@ struct mstudiomodel_t
 	int		norminfoindex;	// normal bone info
 	int		normindex;		// normal glm::vec3
 
-	int		numgroups;		// deformation groups
-	int		groupindex;
+	// Xash3D: offsets to mstudioboneweight_t[numverts]/[numnorms] arrays.
+	// In GoldSource these slots were "numgroups"/"groupindex" (deformation
+	// groups), which the engine never used.
+	int		blendvertinfoindex;
+	int		blendnorminfoindex;
+
+	bool HasBlendedVertices() const { return blendvertinfoindex != 0; }
+	bool HasBlendedNormals() const { return blendnorminfoindex != 0; }
 };
 
 
@@ -442,7 +528,35 @@ struct studiohdr_t
 	int			soundtable;
 	int			soundindex;
 	int			soundgroups;
-	int			soundgroupindex;
+	//! Offset to the animated texture extension block (0 = none), was "soundgroupindex".
+	int			animextindex;
+
+	const	mstudioanimatedtextureheader_t* GetAnimatedTextureHeader() const
+	{
+		return animextindex != 0
+			? reinterpret_cast<const mstudioanimatedtextureheader_t*>(GetData() + animextindex)
+			: nullptr;
+	}
+
+	const	mstudioanimatedtexture_t* GetAnimatedTextures() const
+	{
+		auto header = GetAnimatedTextureHeader();
+		return header != nullptr
+			? reinterpret_cast<const mstudioanimatedtexture_t*>(header + 1)
+			: nullptr;
+	}
+
+	const	mstudioanimatedtexture_t* GetAnimatedTexture(const int iIndex) const
+	{
+		return GetAnimatedTextures() + iIndex;
+	}
+
+	const	int* GetAnimatedTextureFrames(const mstudioanimatedtexture_t& animatedTexture) const
+	{
+		return animatedTexture.numframes > 0
+			? reinterpret_cast<const int*>(GetData() + animatedTexture.frameoffset)
+			: nullptr;
+	}
 
 	int			numtransitions;		// animation node to animation node transition graph
 	int			transitionindex;
@@ -464,6 +578,9 @@ enum
 	STUDIO_NF_ALPHA = 0x0010,
 	STUDIO_NF_ADDITIVE = 0x0020,
 	STUDIO_NF_MASKED = 0x0040,
+
+	//! Xash3D: this texture is driven by an animated texture descriptor.
+	STUDIO_NF_ANIMATED = 0x01000000,
 
 	STUDIO_NF_RENDER_FLAGS = STUDIO_NF_CHROME | STUDIO_NF_ADDITIVE | STUDIO_NF_MASKED | STUDIO_NF_FULLBRIGHT
 };

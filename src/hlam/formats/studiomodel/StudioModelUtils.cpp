@@ -457,7 +457,7 @@ std::vector<StudioMesh> ConvertMeshesToEditable(const StudioModel& studioModel, 
 
 std::vector<StudioModelVertexInfo> ConvertModelVertexInfoToEditable(
 	const StudioModel& studioModel, std::vector<std::unique_ptr<StudioBone>>& bones,
-	int vertexIndex, int vertexInfoIndex, int count)
+	int vertexIndex, int vertexInfoIndex, int count, const int blendInfoIndex)
 {
 	auto header = studioModel.GetStudioHeader();
 
@@ -468,6 +468,16 @@ std::vector<StudioModelVertexInfo> ConvertModelVertexInfoToEditable(
 	ValidateMemoryAddress(studioModel.GetStudioHeaderPtr(), header->GetData() + vertexInfoIndex);
 	ValidateMemoryAddress(studioModel.GetStudioHeaderPtr(),
 		header->GetData() + vertexInfoIndex + sizeof(std::uint8_t) * count);
+
+	const mstudioboneweight_t* boneWeights = nullptr;
+
+	if (blendInfoIndex > 0 && count > 0)
+	{
+		boneWeights = reinterpret_cast<const mstudioboneweight_t*>(header->GetData() + blendInfoIndex);
+
+		ValidateMemoryAddress(studioModel.GetStudioHeaderPtr(), boneWeights);
+		ValidateMemoryAddress(studioModel.GetStudioHeaderPtr(), boneWeights + count);
+	}
 
 	std::vector<StudioModelVertexInfo> result;
 
@@ -480,6 +490,24 @@ std::vector<StudioModelVertexInfo> ConvertModelVertexInfoToEditable(
 			reinterpret_cast<const glm::vec3*>(header->GetData() + vertexIndex)[i],
 			bones[reinterpret_cast<std::uint8_t*>(header->GetData() + vertexInfoIndex)[i]].get()
 		};
+
+		if (boneWeights)
+		{
+			for (int j = 0; j < MaxStudioBoneWeights; ++j)
+			{
+				const int boneIndex = boneWeights[i].bone[j];
+
+				// An entry with bone == -1 is an unused influence.
+				if (boneIndex < 0 || static_cast<std::size_t>(boneIndex) >= bones.size())
+				{
+					continue;
+				}
+
+				info.Weights[info.NumWeights].Bone = bones[boneIndex].get();
+				info.Weights[info.NumWeights].Weight = boneWeights[i].weight[j] / 255.0f;
+				++info.NumWeights;
+			}
+		}
 
 		result.push_back(info);
 	}
@@ -508,8 +536,8 @@ std::vector<StudioSubModel> ConvertModelsToEditable(
 			source->type,
 			source->boundingradius,
 			ConvertMeshesToEditable(studioModel, *source),
-			ConvertModelVertexInfoToEditable(studioModel, bones, source->vertindex, source->vertinfoindex, source->numverts),
-			ConvertModelVertexInfoToEditable(studioModel, bones, source->normindex, source->norminfoindex, source->numnorms)
+			ConvertModelVertexInfoToEditable(studioModel, bones, source->vertindex, source->vertinfoindex, source->numverts, source->blendvertinfoindex),
+			ConvertModelVertexInfoToEditable(studioModel, bones, source->normindex, source->norminfoindex, source->numnorms, source->blendnorminfoindex)
 		};
 
 		result.push_back(std::move(model));
@@ -737,6 +765,99 @@ std::vector<std::vector<std::uint8_t>> ConvertTransitionsToEditable(const Studio
 
 	return result;
 }
+
+/**
+*	@brief Reads the extended bone info block (poseToBone) stored right after the
+*	bone array when the header carries StudioHasBoneInfo.
+*/
+std::vector<std::array<float, 12>> ConvertBoneInfoToEditable(const StudioModel& studioModel)
+{
+	auto header = studioModel.GetStudioHeader();
+
+	std::vector<std::array<float, 12>> result;
+
+	if (!(header->flags & STUDIO_HAS_BONEINFO) || header->numbones <= 0)
+	{
+		return result;
+	}
+
+	const std::size_t offset = header->boneindex + sizeof(mstudiobone_t) * header->numbones;
+
+	const auto boneInfo = reinterpret_cast<const mstudioboneinfo_t*>(header->GetData() + offset);
+
+	ValidateMemoryAddress(studioModel.GetStudioHeaderPtr(), boneInfo);
+	ValidateMemoryAddress(studioModel.GetStudioHeaderPtr(), boneInfo + header->numbones);
+
+	result.reserve(header->numbones);
+
+	for (int i = 0; i < header->numbones; ++i)
+	{
+		std::array<float, 12> poseToBone{};
+
+		std::memcpy(poseToBone.data(), boneInfo[i].poseToBone, sizeof(boneInfo[i].poseToBone));
+
+		result.push_back(poseToBone);
+	}
+
+	return result;
+}
+
+/**
+*	@brief Reads the animated texture extension block, if present.
+*/
+std::vector<std::unique_ptr<StudioAnimatedTexture>> ConvertAnimatedTexturesToEditable(const StudioModel& studioModel)
+{
+	auto header = studioModel.GetStudioHeader();
+
+	std::vector<std::unique_ptr<StudioAnimatedTexture>> result;
+
+	const auto blockHeader = header->GetAnimatedTextureHeader();
+
+	if (blockHeader == nullptr)
+	{
+		return result;
+	}
+
+	ValidateMemoryAddress(studioModel.GetStudioHeaderPtr(), blockHeader);
+
+	if (blockHeader->magic != IDANIMTEXHEADER || blockHeader->version != STUDIO_ANIMTEX_VERSION
+		|| blockHeader->numanimated <= 0 || blockHeader->numanimated > MAXSTUDIOANIMTEXTURES)
+	{
+		return result;
+	}
+
+	const auto descriptors = header->GetAnimatedTextures();
+
+	ValidateMemoryAddress(studioModel.GetStudioHeaderPtr(), descriptors);
+	ValidateMemoryAddress(studioModel.GetStudioHeaderPtr(), descriptors + blockHeader->numanimated);
+
+	result.reserve(blockHeader->numanimated);
+
+	for (int i = 0; i < blockHeader->numanimated; ++i)
+	{
+		const auto& descriptor = descriptors[i];
+
+		if (descriptor.numframes <= 0 || descriptor.numframes > MAXSTUDIOANIMFRAMES)
+		{
+			continue;
+		}
+
+		const int* frames = header->GetAnimatedTextureFrames(descriptor);
+
+		ValidateMemoryAddress(studioModel.GetStudioHeaderPtr(), frames);
+		ValidateMemoryAddress(studioModel.GetStudioHeaderPtr(), frames + descriptor.numframes);
+
+		auto animatedTexture = std::make_unique<StudioAnimatedTexture>();
+
+		animatedTexture->FrameRate = descriptor.framerate;
+		animatedTexture->TextureIndex = descriptor.textureindex;
+		animatedTexture->Frames.assign(frames, frames + descriptor.numframes);
+
+		result.push_back(std::move(animatedTexture));
+	}
+
+	return result;
+}
 }
 
 static void ValidateCount(int count)
@@ -790,6 +911,11 @@ EditableStudioModel ConvertToEditable(const StudioModel& studioModel)
 	result.SkinFamilies = ConvertSkinFamiliesToEditable(studioModel, result.Textures);
 
 	result.Transitions = ConvertTransitionsToEditable(studioModel);
+
+	// Xash3D extensions.
+	result.HasBoneWeights = (header->flags & STUDIO_HAS_BONEWEIGHTS) != 0;
+	result.BoneInfoPoseToBone = ConvertBoneInfoToEditable(studioModel);
+	result.AnimatedTextures = ConvertAnimatedTexturesToEditable(studioModel);
 
 	result.HasExternalTextureFile = studioModel.HasSeparateTextureHeader();
 
@@ -875,6 +1001,32 @@ void ConvertBonesFromEditable(const EditableStudioModel& studioModel, studiohdr_
 				dest.value[j] = axis.Value;
 				dest.scale[j] = axis.Scale;
 			}
+		}
+
+		// Xash3D stores the extended bone info immediately after the bone array.
+		if (studioModel.HasBoneWeights)
+		{
+			auto boneInfo = AllocateBufferArray<mstudioboneinfo_t>(buffer, studioModel.Bones.size());
+
+			for (int i = 0; i < header.numbones; ++i)
+			{
+				boneInfo[i] = mstudioboneinfo_t{};
+
+				if (static_cast<std::size_t>(i) < studioModel.BoneInfoPoseToBone.size())
+				{
+					std::memcpy(boneInfo[i].poseToBone, studioModel.BoneInfoPoseToBone[i].data(),
+						sizeof(boneInfo[i].poseToBone));
+				}
+				else
+				{
+					// Missing data: identity inverse bind pose.
+					boneInfo[i].poseToBone[0][0] = 1.0f;
+					boneInfo[i].poseToBone[1][1] = 1.0f;
+					boneInfo[i].poseToBone[2][2] = 1.0f;
+				}
+			}
+
+			header.flags |= STUDIO_HAS_BONEINFO;
 		}
 	}
 
@@ -1212,6 +1364,37 @@ void ConvertBodypartsFromEditable(const EditableStudioModel& studioModel, studio
 				AlignBuffer(buffer);
 			}
 
+			if (studioModel.HasBoneWeights)
+			{
+				destModel.blendvertinfoindex = buffer.size();
+
+				auto vertexWeights = AllocateBufferArray<mstudioboneweight_t>(buffer, destModel.numverts);
+
+				for (std::size_t j = 0; j < sourceModel.Vertices.size(); ++j)
+				{
+					const auto& sourceVertex = sourceModel.Vertices[j];
+
+					for (int k = 0; k < MaxStudioBoneWeights; ++k)
+					{
+						if (k < sourceVertex.NumWeights)
+						{
+							const auto& weight = sourceVertex.Weights[k];
+
+							vertexWeights[j].bone[k] = static_cast<std::int8_t>(weight.Bone->ArrayIndex);
+							vertexWeights[j].weight[k] = static_cast<std::uint8_t>(
+								std::clamp(weight.Weight, 0.0f, 1.0f) * 255.0f);
+						}
+						else
+						{
+							vertexWeights[j].bone[k] = -1;
+							vertexWeights[j].weight[k] = 0;
+						}
+					}
+				}
+
+				AlignBuffer(buffer);
+			}
+
 			{
 				destModel.numnorms = sourceModel.Normals.size();
 				destModel.norminfoindex = buffer.size();
@@ -1221,6 +1404,37 @@ void ConvertBodypartsFromEditable(const EditableStudioModel& studioModel, studio
 				for (std::size_t j = 0; j < sourceModel.Normals.size(); ++j)
 				{
 					normalInfo[j] = sourceModel.Normals[j].Bone->ArrayIndex;
+				}
+
+				AlignBuffer(buffer);
+			}
+
+			if (studioModel.HasBoneWeights)
+			{
+				destModel.blendnorminfoindex = buffer.size();
+
+				auto normalWeights = AllocateBufferArray<mstudioboneweight_t>(buffer, destModel.numnorms);
+
+				for (std::size_t j = 0; j < sourceModel.Normals.size(); ++j)
+				{
+					const auto& sourceNormal = sourceModel.Normals[j];
+
+					for (int k = 0; k < MaxStudioBoneWeights; ++k)
+					{
+						if (k < sourceNormal.NumWeights)
+						{
+							const auto& weight = sourceNormal.Weights[k];
+
+							normalWeights[j].bone[k] = static_cast<std::int8_t>(weight.Bone->ArrayIndex);
+							normalWeights[j].weight[k] = static_cast<std::uint8_t>(
+								std::clamp(weight.Weight, 0.0f, 1.0f) * 255.0f);
+						}
+						else
+						{
+							normalWeights[j].bone[k] = -1;
+							normalWeights[j].weight[k] = 0;
+						}
+					}
 				}
 
 				AlignBuffer(buffer);
@@ -1359,6 +1573,80 @@ void ConvertTexturesFromEditable(const EditableStudioModel& studioModel, studioh
 */
 constexpr std::size_t StudioModelBufferSize = 16 * 1024 * 1024;
 
+namespace
+{
+/**
+*	@brief Writes the animated texture extension block (Xash3D).
+*/
+void ConvertAnimatedTexturesFromEditable(const EditableStudioModel& studioModel, studiohdr_t& header, std::vector<std::byte>& buffer)
+{
+	header.animextindex = 0;
+
+	if (studioModel.AnimatedTextures.empty())
+	{
+		return;
+	}
+
+	header.animextindex = buffer.size();
+
+	const std::size_t count = std::min<std::size_t>(studioModel.AnimatedTextures.size(),
+		MAXSTUDIOANIMTEXTURES);
+
+	// Allocate everything first: AllocateBufferArray may reallocate the buffer,
+	// so the data is written through fresh offsets at the end.
+	const std::size_t headerOffset = buffer.size();
+
+	AllocateBufferArray<mstudioanimatedtextureheader_t>(buffer, 1);
+
+	const std::size_t descriptorOffset = buffer.size();
+
+	AllocateBufferArray<mstudioanimatedtexture_t>(buffer, count);
+
+	std::vector<std::vector<int>> frameLists(count);
+	std::vector<std::size_t> frameOffsets(count, 0);
+
+	for (std::size_t i = 0; i < count; ++i)
+	{
+		frameLists[i] = studioModel.AnimatedTextures[i]->Frames;
+
+		if (frameLists[i].size() > MAXSTUDIOANIMFRAMES)
+		{
+			frameLists[i].resize(MAXSTUDIOANIMFRAMES);
+		}
+
+		if (!frameLists[i].empty())
+		{
+			frameOffsets[i] = buffer.size();
+
+			auto frameData = AllocateBufferArray<int>(buffer, frameLists[i].size());
+
+			std::memcpy(frameData, frameLists[i].data(), sizeof(int) * frameLists[i].size());
+
+			AlignBuffer(buffer);
+		}
+	}
+
+	auto* blockHeader = reinterpret_cast<mstudioanimatedtextureheader_t*>(buffer.data() + headerOffset);
+
+	blockHeader->magic = IDANIMTEXHEADER;
+	blockHeader->version = STUDIO_ANIMTEX_VERSION;
+	blockHeader->numanimated = static_cast<int>(count);
+
+	auto* descriptors = reinterpret_cast<mstudioanimatedtexture_t*>(buffer.data() + descriptorOffset);
+
+	for (std::size_t i = 0; i < count; ++i)
+	{
+		const auto& source = *studioModel.AnimatedTextures[i];
+
+		descriptors[i] = mstudioanimatedtexture_t{};
+		descriptors[i].framerate = source.FrameRate;
+		descriptors[i].numframes = static_cast<int>(frameLists[i].size());
+		descriptors[i].frameoffset = static_cast<int>(frameOffsets[i]);
+		descriptors[i].textureindex = source.TextureIndex;
+	}
+}
+} // namespace
+
 StudioModel ConvertFromEditable(const std::filesystem::path& fileName, const EditableStudioModel& studioModel)
 {
 	//Use a local header until all data is written, then write the header to the start of the buffer
@@ -1387,6 +1675,11 @@ StudioModel ConvertFromEditable(const std::filesystem::path& fileName, const Edi
 	header.bbmax = studioModel.ClippingMax;
 	header.flags = studioModel.Flags;
 
+	if (studioModel.HasBoneWeights)
+	{
+		header.flags |= STUDIO_HAS_BONEWEIGHTS;
+	}
+
 	ConvertBonesFromEditable(studioModel, header, buffer);
 	ConvertAttachmentsFromEditable(studioModel, header, buffer);
 	ConvertHitboxesFromEditable(studioModel, header, buffer);
@@ -1400,6 +1693,7 @@ StudioModel ConvertFromEditable(const std::filesystem::path& fileName, const Edi
 	ConvertTransitionsFromEditable(studioModel, header, buffer);
 	ConvertBodypartsFromEditable(studioModel, header, buffer);
 	ConvertTexturesFromEditable(studioModel, header, buffer);
+	ConvertAnimatedTexturesFromEditable(studioModel, header, buffer);
 
 	header.length = buffer.size();
 

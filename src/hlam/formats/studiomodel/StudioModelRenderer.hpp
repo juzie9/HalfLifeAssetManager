@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <memory>
 #include <vector>
 
@@ -27,6 +28,7 @@ namespace studiomdl
 {
 struct StudioAnimation;
 struct StudioBone;
+struct StudioModelVertexInfo;
 struct StudioSubModel;
 struct StudioSequence;
 
@@ -128,6 +130,18 @@ private:
 	void SetUpBones();
 
 	/**
+	*	@brief Transforms a vertex using its bone weights, falling back to the
+	*	single bone transform for classic models.
+	*/
+	glm::vec3 TransformVertex(const StudioModelVertexInfo& vertexInfo) const;
+
+	/**
+	*	@brief Resolves the texture to draw for the current frame, applying the
+	*	animated texture frame list when the texture is animated.
+	*/
+	int ResolveTextureIndex(int textureIndex) const;
+
+	/**
 	*	@brief set some global variables based on entity position
 	*/
 	void SetupLighting();
@@ -181,6 +195,18 @@ private:
 	BoneTransformer _boneTransformer;
 
 	const glm::mat4x4* _bonetransform{};	// bone transformation matrix
+
+	/**
+	*	@brief Skinning matrices for bone weighted models.
+	*
+	*	worldtransform[i] = bonetransform[i] * poseToBone[i], matching the engine:
+	*	vertices of bone weighted models are stored in model space, so the
+	*	inverse bind pose converts them back to bone space first.
+	*/
+	std::array<glm::mat4x4, MAXSTUDIOBONES> _worldtransform{};
+
+	//! Seconds elapsed for animated texture playback.
+	double _animationTime = 0;
 
 	graphics::Light _skyLight;
 	glm::vec3		_blightvec[MAXSTUDIOBONES];		// light vectors in bone reference frames

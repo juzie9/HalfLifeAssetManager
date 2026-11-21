@@ -153,10 +153,31 @@ struct StudioMesh
 	int SkinRef = 0;
 };
 
+struct StudioBoneWeight
+{
+	StudioBone* Bone = nullptr;
+	float Weight = 0;
+};
+
 struct StudioModelVertexInfo
 {
 	glm::vec3 Vertex{0};
 	StudioBone* Bone = nullptr;
+
+	// Xash3D bone weights. NumWeights is 0 for classic models, in which case
+	// Bone above is authoritative.
+	std::array<StudioBoneWeight, MaxStudioBoneWeights> Weights{};
+	int NumWeights = 0;
+};
+
+/**
+*	@brief Descriptor for a texture that cycles through a frame list.
+*/
+struct StudioAnimatedTexture
+{
+	int FrameRate = 0;
+	int TextureIndex = 0;
+	std::vector<int> Frames;
 };
 
 struct StudioSubModel
@@ -233,6 +254,16 @@ public:
 
 	std::vector<std::vector<std::uint8_t>> Transitions;
 
+	// Xash3D extensions.
+	//! True when the model stores per-vertex bone weights (and poseToBone data).
+	bool HasBoneWeights = false;
+
+	//! Inverse bind pose per bone (bone space -> model space), row-major 3x4.
+	std::vector<std::array<float, 12>> BoneInfoPoseToBone;
+
+	//! Descriptors for textures that cycle through a frame list.
+	std::vector<std::unique_ptr<StudioAnimatedTexture>> AnimatedTextures;
+
 	// In-memory state.
 	std::vector<GLuint> TextureHandles;
 
@@ -251,6 +282,31 @@ public:
 	bool CalculateBodygroup(const int iGroup, const int iValue, int& iInOutBodygroup) const;
 
 	std::vector<const StudioMesh*> ComputeMeshList(const int texture) const;
+
+	/**
+	*	@return The animated texture descriptor that drives the given texture
+	*	index, or nullptr when the texture is not animated.
+	*/
+	const StudioAnimatedTexture* FindAnimatedTexture(const int textureIndex) const
+	{
+		for (const auto& animatedTexture : AnimatedTextures)
+		{
+			if (animatedTexture->TextureIndex == textureIndex)
+			{
+				return animatedTexture.get();
+			}
+
+			for (const int frame : animatedTexture->Frames)
+			{
+				if (frame == textureIndex)
+				{
+					return animatedTexture.get();
+				}
+			}
+		}
+
+		return nullptr;
+	}
 
 	void CreateTextures(graphics::TextureLoader& textureLoader);
 
